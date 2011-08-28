@@ -42,10 +42,12 @@ module Resque
     def self.create(queue, klass, *args)
       Resque.validate(klass, queue)
 
+      payload = { :class => klass.to_s, :args => args }
+
       if Resque.inline?
-        constantize(klass).perform(*decode(encode(args)))
+        new(queue, decode(encode(payload))).perform
       else
-        Resque.push(queue, :class => klass.to_s, :args => args)
+        Resque.push(queue, payload)
       end
     end
 
