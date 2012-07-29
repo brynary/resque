@@ -89,6 +89,8 @@ module Resque
     # removed without needing to restart workers using this method.
     def initialize(*queues)
       @queues = queues.map { |queue| queue.to_s.strip }
+      @shutdown = nil
+      @paused = nil
       validate_queues
     end
 
@@ -138,6 +140,7 @@ module Resque
             Process.wait(@child)
           else
             procline "Processing #{job.queue} since #{Time.now.to_i}"
+            redis.client.reconnect # Don't share connection with parent
             perform(job, &block)
             exit! unless @cant_fork
           end

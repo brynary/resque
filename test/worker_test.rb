@@ -43,7 +43,7 @@ context "Resque::Worker" do
     def self.on_failure_record_failure(exception, *job_args)
       @@exception = exception
     end
-    
+
     def self.exception
       @@exception
     end
@@ -55,6 +55,29 @@ context "Resque::Worker" do
     @worker.unregister_worker
     assert_equal 1, Resque::Failure.count
     assert(SimpleJobWithFailureHandling.exception.kind_of?(Resque::DirtyExit))
+  end
+
+  class ::SimpleFailingJob
+    @@exception_count = 0
+
+    def self.on_failure_record_failure(exception, *job_args)
+      @@exception_count += 1
+    end
+
+    def self.exception_count
+      @@exception_count
+    end
+
+    def self.perform
+      raise Exception.new
+    end
+  end
+
+  test "only calls failure hook once on exception" do
+    job = Resque::Job.new(:jobs, {'class' => 'SimpleFailingJob', 'args' => ""})
+    @worker.perform(job)
+    assert_equal 1, Resque::Failure.count
+    assert_equal 1, SimpleFailingJob.exception_count
   end
 
   test "can peek at failed jobs" do
@@ -355,16 +378,22 @@ context "Resque::Worker" do
   end
 
   test "very verbose works in the afternoon" do
-    require 'time'
-    $last_puts = ""
-    $fake_time = Time.parse("15:44:33 2011-03-02")
-    singleton = class << @worker; self end
-    singleton.send :define_method, :puts, lambda { |thing| $last_puts = thing }
+    begin
+      require 'time'
+      last_puts = ""
+      Time.fake_time = Time.parse("15:44:33 2011-03-02")
 
-    @worker.very_verbose = true
-    @worker.log("some log text")
+      @worker.extend(Module.new {
+        define_method(:puts) { |thing| last_puts = thing }
+      })
 
-    assert_match /\*\* \[15:44:33 2011-03-02\] \d+: some log text/, $last_puts
+      @worker.very_verbose = true
+      @worker.log("some log text")
+
+      assert_match /\*\* \[15:44:33 2011-03-02\] \d+: some log text/, last_puts
+    ensure
+      Time.fake_time = nil
+    end
   end
 
   test "Will call an after_fork hook after forking" do
@@ -382,7 +411,7 @@ context "Resque::Worker" do
   test "returns PID of running process" do
     assert_equal @worker.to_s.split(":")[1].to_i, @worker.pid
   end
-  
+
   test "requeue failed queue" do
     queue = 'good_job'
     Resque::Failure.create(:exception => Exception.new, :worker => Resque::Worker.new(queue), :queue => queue, :payload => {'class' => 'GoodJob'})
@@ -401,5 +430,11 @@ context "Resque::Worker" do
     Resque::Failure.remove_queue(queue)
     assert_equal queue2, Resque::Failure.all(0)['queue']
     assert_equal 1, Resque::Failure.count
+  end
+
+  test "reconnects to redis after fork" do
+    original_connection = Resque.redis.client.connection.instance_variable_get("@sock")
+    @worker.work(0)
+    assert_not_equal original_connection, Resque.redis.client.connection.instance_variable_get("@sock")
   end
 end
